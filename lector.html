@@ -243,11 +243,11 @@
 
         if (data.status === "success") {
           resultado.className = "result-card result-success";
-          resultado.innerText = `✅ Acceso: ${data.message} (${data.hora})`;
+          resultado.innerText = `Acceso: ${data.message} (${data.hora})`;
           reproducirBeep(800, 150); // Beep agudo de éxito
         } else {
           resultado.className = "result-card result-error";
-          resultado.innerText = `❌ ${data.message || "QR inválido o expirado"}`;
+          resultado.innerText = `${data.message || "QR inválido o expirado"}`;
           reproducirBeep(300, 400); // Beep grave de error
         }
 
