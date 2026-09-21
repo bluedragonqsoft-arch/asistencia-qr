@@ -27,6 +27,7 @@
       max-width: 440px;
       text-align: center;
       box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      position: relative;
     }
     h1 { font-size: 22px; margin: 0 0 6px; }
     p { color: #94a3b8; font-size: 13px; margin: 0 0 18px; }
@@ -64,11 +65,57 @@
       background: #000;
       margin-bottom: 16px;
       position: relative;
+      min-height: 240px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     #reader {
       width: 100% !important;
       border: none !important;
     }
+
+    /* Cortina de bloqueo tras éxito */
+    #success-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15, 23, 42, 0.95);
+      border-radius: 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 10;
+      transition: all 0.3s ease;
+    }
+    #success-overlay.hidden { display: none; }
+    .icon-check {
+      width: 60px; height: 60px;
+      border-radius: 50%;
+      background: #22c55e;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      margin-bottom: 12px;
+      box-shadow: 0 0 20px rgba(34, 197, 94, 0.5);
+    }
+
+    .btn-action {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 14px;
+      transition: background 0.2s;
+    }
+    .btn-action:hover { background: #1d4ed8; }
 
     .btn-cam {
       background: #334155;
@@ -82,14 +129,6 @@
       font-weight: 500;
     }
     .btn-cam:hover { background: #475569; }
-
-    /* Input oculto/enfocado para la pistola lectora */
-    #gun-input {
-      position: absolute;
-      opacity: 0;
-      pointer-events: none;
-      top: -100px;
-    }
 
     .result-card {
       padding: 16px;
@@ -118,41 +157,53 @@
       <span class="badge badge-camara" id="badge-cam-status"><span class="dot"></span> Cámara inactiva</span>
     </div>
 
-    <!-- Visor de Cámara -->
+    <!-- Contenedor del lector y cortina de éxito -->
     <div id="reader-container">
       <div id="reader"></div>
+
+      <div id="success-overlay" class="hidden">
+        <div class="icon-check">✓</div>
+        <h3 id="overlay-dni" style="margin: 0 0 6px; font-size: 18px; color: #f8fafc;">Asistencia Registrada</h3>
+        <p id="overlay-time" style="margin: 0; font-size: 14px; color: #94a3b8;">Hora: --:--:--</p>
+        <div id="overlay-timer" style="margin-top: 10px; font-size: 12px; color: #38bdf8;">Listo para siguiente en 4s...</div>
+        <button class="btn-action" onclick="reanudarEscaneo()">Escanear Siguiente Ahora</button>
+      </div>
     </div>
 
     <button id="btn-toggle-cam" class="btn-cam" onclick="toggleCamara()">Encender Cámara</button>
 
-    <!-- Input que escucha a la pistola USB/Bluetooth -->
-    <input type="text" id="gun-input" autofocus autocomplete="off">
-
-    <!-- Tarjeta de estado / resultado -->
     <div id="resultado" class="result-card result-waiting">
       Esperando escaneo...
     </div>
   </div>
 
   <script>
-    // TU ENDPOINT ACTIVO DE GOOGLE APPS SCRIPT
     const API_URL = "https://script.google.com/macros/s/AKfycbxw4SCqgPWhdOoretORgpEDtQOACBAlathlotgaklaMAPfUSgNnIpq24FUMi2J8dpsN/exec";
 
     let html5QrCode = null;
     let camaraActiva = false;
     let procesando = false;
+    let cooldownTimer = null;
+    
+    // Control en memoria de duplicados inmediatos en este terminal
+    let ultimoDniRegistrado = "";
+    let tiempoUltimoRegistro = 0;
+    const TIEMPO_BLOQUEO_MISMO_DNI_MS = 60000; // 60 seg en este terminal
+
     const resultado = document.getElementById("resultado");
-    const gunInput = document.getElementById("gun-input");
     const badgeCam = document.getElementById("badge-cam-status");
     const btnCam = document.getElementById("btn-toggle-cam");
+    const overlay = document.getElementById("success-overlay");
+    const overlayDni = document.getElementById("overlay-dni");
+    const overlayTime = document.getElementById("overlay-time");
+    const overlayTimerText = document.getElementById("overlay-timer");
 
     // ==========================================
     // 1. CAPTURA CON PISTOLA LECTORA (HID KEYBOARD)
     // ==========================================
     let bufferPistola = "";
-    let ultimoTiempo = 0;
+    let ultimoTiempoTecla = 0;
 
-    // Escuchar disparos rápidos de teclado de la pistola
     document.addEventListener("keydown", (e) => {
       const tiempoActual = Date.now();
 
@@ -164,18 +215,17 @@
         return;
       }
 
-      // Si las teclas llegan a gran velocidad (< 50ms entre caracteres), es una pistola
       if (e.key.length === 1) {
-        if (tiempoActual - ultimoTiempo > 100) {
-          bufferPistola = ""; // Reinicia si el usuario escribió manualmente lento
+        if (tiempoActual - ultimoTiempoTecla > 100) {
+          bufferPistola = "";
         }
         bufferPistola += e.key;
-        ultimoTiempo = tiempoActual;
+        ultimoTiempoTecla = tiempoActual;
       }
     });
 
     // ==========================================
-    // 2. CAPTURA CON CÁMARA WEB / MÓVIL
+    // 2. CAPTURA CON CÁMARA
     // ==========================================
     async function toggleCamara() {
       if (camaraActiva) {
@@ -187,7 +237,7 @@
 
     async function iniciarCamara() {
       html5QrCode = new Html5Qrcode("reader");
-      const config = { fps: 15, qrbox: { width: 250, height: 250 } };
+      const config = { fps: 15, qrbox: { width: 240, height: 240 } };
 
       try {
         await html5QrCode.start(
@@ -202,9 +252,9 @@
         badgeCam.innerText = "● Cámara activa";
         badgeCam.style.color = "#4ade80";
       } catch (err) {
-        console.error("Error al iniciar la cámara:", err);
+        console.error("Error al iniciar cámara:", err);
         resultado.className = "result-card result-error";
-        resultado.innerText = "No se pudo acceder a la cámara (revisa permisos).";
+        resultado.innerText = "Cámara no disponible o sin permiso.";
       }
     }
 
@@ -220,18 +270,31 @@
     }
 
     // ==========================================
-    // 3. ENVÍO A GOOGLE SHEETS
+    // 3. ENVÍO Y VALIDACIÓN DE DUPLICADOS
     // ==========================================
     async function procesarAsistencia(codigoQR, origen) {
-      if (procesando) return; // Evita doble lectura simultánea
-      procesando = true;
+      if (procesando) return; // Bloquea si ya hay un escaneo en curso o en enfriamiento
 
+      const partes = codigoQR.split("|");
+      const dni = partes[0] || "";
+      const ahora = Date.now();
+
+      // Prevenir marcar 2 veces seguidas al mismo DNI en el mismo minuto
+      if (dni === ultimoDniRegistrado && (ahora - tiempoUltimoRegistro < TIEMPO_BLOQUEO_MISMO_DNI_MS)) {
+        resultado.className = "result-card result-error";
+        resultado.innerText = `⚠️ El DNI ${dni} ya marcó asistencia recientemente.`;
+        reproducirBeep(300, 300);
+        return;
+      }
+
+      procesando = true;
       resultado.className = "result-card result-waiting";
       resultado.innerText = `Validando (${origen})...`;
 
       try {
         const resp = await fetch(API_URL, {
           method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
           body: JSON.stringify({
             action: "marcarAsistencia",
             code: codigoQR,
@@ -242,29 +305,58 @@
         const data = await resp.json();
 
         if (data.status === "success") {
+          ultimoDniRegistrado = dni;
+          tiempoUltimoRegistro = ahora;
+
           resultado.className = "result-card result-success";
-          resultado.innerText = `Acceso: ${data.message} (${data.hora})`;
-          reproducirBeep(800, 150); // Beep agudo de éxito
+          resultado.innerText = `✅ Acceso: ${data.message} (${data.hora})`;
+          reproducirBeep(800, 150);
+
+          // Mostrar cortina de éxito y pausar el lector 4 segundos
+          mostrarExito(dni, data.hora);
+
         } else {
           resultado.className = "result-card result-error";
-          resultado.innerText = `${data.message || "QR inválido o expirado"}`;
-          reproducirBeep(300, 400); // Beep grave de error
+          resultado.innerText = `❌ ${data.message || "QR inválido o expirado"}`;
+          reproducirBeep(300, 400);
+          // Permitir reintentar tras 2 segundos si falló
+          setTimeout(() => { procesando = false; }, 2000);
         }
 
       } catch (err) {
         resultado.className = "result-card result-error";
         resultado.innerText = "Error al conectar con Google Sheets";
+        setTimeout(() => { procesando = false; }, 2000);
       }
-
-      // Pausa de 2.5 segundos para que la persona retire el celular y no marque doble
-      setTimeout(() => {
-        resultado.className = "result-card result-waiting";
-        resultado.innerText = "Esperando escaneo...";
-        procesando = false;
-      }, 2500);
     }
 
-    // Sonido por los altavoces de la máquina
+    function mostrarExito(dni, hora) {
+      overlayDni.innerText = `DNI: ${dni}`;
+      overlayTime.innerText = `Hora registrada: ${hora}`;
+      overlay.classList.remove("hidden");
+
+      let cuentaAtras = 4;
+      overlayTimerText.innerText = `Siguiente escaneo en ${cuentaAtras}s...`;
+
+      clearInterval(cooldownTimer);
+      cooldownTimer = setInterval(() => {
+        cuentaAtras--;
+        if (cuentaAtras > 0) {
+          overlayTimerText.innerText = `Siguiente escaneo en ${cuentaAtras}s...`;
+        } else {
+          reanudarEscaneo();
+        }
+      }, 1000);
+    }
+
+    function reanudarEscaneo() {
+      clearInterval(cooldownTimer);
+      overlay.classList.add("hidden");
+      resultado.className = "result-card result-waiting";
+      resultado.innerText = "Esperando escaneo...";
+      procesando = false;
+    }
+
     function reproducirBeep(frecuencia, duracionMs) {
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -278,7 +370,6 @@
       } catch (e) {}
     }
 
-    // Intentar abrir cámara automáticamente al cargar
     window.addEventListener("DOMContentLoaded", () => {
       iniciarCamara();
     });
