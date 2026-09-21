@@ -65,7 +65,7 @@
     }
     #reader { width: 100% !important; border: none !important; }
 
-    #success-overlay {
+    #status-overlay {
       position: absolute;
       inset: 0;
       background: rgba(15, 23, 42, 0.96);
@@ -79,17 +79,24 @@
     }
     .hidden { display: none !important; }
 
-    .icon-check {
+    .status-icon {
       width: 58px; height: 58px;
       border-radius: 50%;
-      background: #22c55e;
       color: white;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 30px;
+      font-size: 26px;
+      font-weight: bold;
       margin-bottom: 12px;
+    }
+    .icon-success {
+      background: #22c55e;
       box-shadow: 0 0 20px rgba(34, 197, 94, 0.4);
+    }
+    .icon-warning {
+      background: #f59e0b;
+      box-shadow: 0 0 20px rgba(245, 158, 11, 0.4);
     }
 
     .btn-action {
@@ -130,6 +137,7 @@
     }
     .result-waiting { background: #334155; color: #cbd5e1; }
     .result-success { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid #22c55e; }
+    .result-warning { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #f59e0b; }
     .result-error { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; }
   </style>
 </head>
@@ -137,7 +145,7 @@
 
   <div class="scanner-card">
     <h1>Terminal de Asistencia</h1>
-    <p>Escanea con cámara web o pistola física</p>
+    <p>Escaneo mediante cámara web o pistola física</p>
 
     <div class="badges-wrapper">
       <span class="badge badge-pistola"><span class="dot"></span> Pistola lista</span>
@@ -147,10 +155,10 @@
     <div id="reader-container">
       <div id="reader"></div>
 
-      <div id="success-overlay" class="hidden">
-        <div class="icon-check">✓</div>
-        <h3 id="overlay-dni" style="margin: 0 0 6px; font-size: 18px; color: #f8fafc;">Asistencia Registrada</h3>
-        <p id="overlay-time" style="margin: 0; font-size: 14px; color: #94a3b8;">Hora: --:--:--</p>
+      <div id="status-overlay" class="hidden">
+        <div id="overlay-icon" class="status-icon icon-success">OK</div>
+        <h3 id="overlay-title" style="margin: 0 0 6px; font-size: 18px; color: #f8fafc;">Asistencia Registrada</h3>
+        <p id="overlay-sub" style="margin: 0; font-size: 14px; color: #94a3b8;">Hora: --:--:--</p>
         <div id="overlay-timer" style="margin-top: 10px; font-size: 13px; color: #38bdf8;">Siguiente en 4s...</div>
         <button class="btn-action" onclick="reanudarEscaneo()">Escanear Siguiente</button>
       </div>
@@ -171,19 +179,27 @@
     let procesando = false;
     let cooldownTimer = null;
 
-    let ultimoDniRegistrado = "";
-    let tiempoUltimoRegistro = 0;
-    const BLOQUEO_DNI_MS = 60000; // 60s mínimo para el mismo DNI en este navegador
+    const BLOQUEO_DNI_MS = 60000; // 60 segundos mínimo por DNI
+
+    function getUltimaMarcaLocal(dni) {
+      const guardado = localStorage.getItem("cooldown_" + dni);
+      return guardado ? parseInt(guardado, 10) : 0;
+    }
+
+    function setUltimaMarcaLocal(dni, timestamp) {
+      localStorage.setItem("cooldown_" + dni, timestamp.toString());
+    }
 
     const resultado = document.getElementById("resultado");
     const badgeCam = document.getElementById("badge-cam-status");
     const btnCam = document.getElementById("btn-toggle-cam");
-    const overlay = document.getElementById("success-overlay");
-    const overlayDni = document.getElementById("overlay-dni");
-    const overlayTime = document.getElementById("overlay-time");
+    const overlay = document.getElementById("status-overlay");
+    const overlayIcon = document.getElementById("overlay-icon");
+    const overlayTitle = document.getElementById("overlay-title");
+    const overlaySub = document.getElementById("overlay-sub");
     const overlayTimerText = document.getElementById("overlay-timer");
 
-    // Audio seguro con instancia única
+    // Audio controlado con instancia única
     let audioCtx = null;
     function reproducirBeep(freq, durMs) {
       try {
@@ -202,7 +218,7 @@
       } catch (e) {}
     }
 
-    // 1. PISTOLA FÍSICA
+    // 1. CAPTURA POR PISTOLA
     let bufferPistola = "";
     let ultimoKeyTime = 0;
 
@@ -222,7 +238,7 @@
       }
     });
 
-    // 2. CÁMARA
+    // 2. CAPTURA POR CÁMARA
     async function toggleCamara() {
       if (camaraActiva) await detenerCamara();
       else await iniciarCamara();
@@ -238,7 +254,7 @@
         );
         camaraActiva = true;
         btnCam.innerText = "Apagar Cámara";
-        badgeCam.innerText = "● Cámara activa";
+        badgeCam.innerText = "Cámara activa";
         badgeCam.style.color = "#4ade80";
       } catch (err) {
         resultado.className = "result-card result-error";
@@ -252,30 +268,36 @@
         html5QrCode.clear();
         camaraActiva = false;
         btnCam.innerText = "Encender Cámara";
-        badgeCam.innerText = "● Cámara inactiva";
+        badgeCam.innerText = "Cámara inactiva";
         badgeCam.style.color = "#94a3b8";
       }
     }
 
-    // 3. ENVÍO Y PROCESAMIENTO
+    // 3. ENVÍO Y CONTROL DE TIEMPOS
     async function procesarAsistencia(codigoQR, origen) {
       if (procesando) return;
 
       const partes = codigoQR.split("|");
-      const dni = partes[0] || "";
+      const dni = (partes[0] || "").trim();
       const ahora = Date.now();
 
-      // Bloqueo rápido de DNI idéntico en este terminal
-      if (dni === ultimoDniRegistrado && (ahora - tiempoUltimoRegistro < BLOQUEO_DNI_MS)) {
-        resultado.className = "result-card result-error";
-        resultado.innerText = `⚠️ DNI ${dni} ya marcó asistencia hace un momento.`;
-        reproducirBeep(300, 200);
+      // Validación local persistente (sobrevive a F5 / recargas)
+      const ultimaVez = getUltimaMarcaLocal(dni);
+      if (ahora - ultimaVez < BLOQUEO_DNI_MS) {
+        procesando = true;
+        if (html5QrCode && camaraActiva) {
+          try { html5QrCode.pause(true); } catch(e) {}
+        }
+        reproducirBeep(350, 250);
+        resultado.className = "result-card result-warning";
+        resultado.innerText = `DNI ${dni} ya marcó asistencia recientemente.`;
+        mostrarNotificacion("warning", `DNI ${dni}`, "Ya marcó asistencia recientemente.");
         return;
       }
 
       procesando = true;
 
-      // PAUSAR CÁMARA INMEDIATAMENTE PARA EVITAR DETECCIONES EN BUCLE
+      // Pausar inmediatamente la cámara para evitar lecturas sucesivas
       if (html5QrCode && camaraActiva) {
         try { html5QrCode.pause(true); } catch(e) {}
       }
@@ -297,45 +319,55 @@
         const data = await resp.json();
 
         if (data.status === "success") {
-          ultimoDniRegistrado = dni;
-          tiempoUltimoRegistro = ahora;
+          setUltimaMarcaLocal(dni, ahora);
 
           resultado.className = "result-card result-success";
-          resultado.innerText = `✅ Acceso: ${data.message} (${data.hora})`;
+          resultado.innerText = `Acceso: ${data.message} (${data.hora})`;
           reproducirBeep(850, 150);
 
-          mostrarExito(dni, data.hora);
+          mostrarNotificacion("success", `DNI: ${dni}`, `Hora: ${data.hora}`);
         } else {
-          resultado.className = "result-card result-error";
-          resultado.innerText = `❌ ${data.message || "QR inválido o expirado"}`;
-          reproducirBeep(300, 300);
+          const esDuplicado = (data.message || "").toLowerCase().includes("marcó") || 
+                              (data.message || "").toLowerCase().includes("registrada") ||
+                              (data.message || "").toLowerCase().includes("espera");
 
-          // Si falló, reanudar cámara tras 2 segundos
-          setTimeout(() => {
-            if (html5QrCode && camaraActiva) {
-              try { html5QrCode.resume(); } catch(e) {}
-            }
-            procesando = false;
-            resultado.className = "result-card result-waiting";
-            resultado.innerText = "Esperando escaneo...";
-          }, 2000);
+          if (esDuplicado) {
+            setUltimaMarcaLocal(dni, ahora);
+            resultado.className = "result-card result-warning";
+            resultado.innerText = data.message;
+            reproducirBeep(350, 250);
+            mostrarNotificacion("warning", `DNI ${dni}`, data.message);
+          } else {
+            resultado.className = "result-card result-error";
+            resultado.innerText = data.message || "QR inválido o expirado";
+            reproducirBeep(300, 300);
+
+            setTimeout(() => {
+              reanudarEscaneo();
+            }, 2000);
+          }
         }
 
       } catch (err) {
         resultado.className = "result-card result-error";
         resultado.innerText = "Error de conexión con Google Sheets";
         setTimeout(() => {
-          if (html5QrCode && camaraActiva) {
-            try { html5QrCode.resume(); } catch(e) {}
-          }
-          procesando = false;
+          reanudarEscaneo();
         }, 2000);
       }
     }
 
-    function mostrarExito(dni, hora) {
-      overlayDni.innerText = `DNI: ${dni}`;
-      overlayTime.innerText = `Hora: ${hora}`;
+    function mostrarNotificacion(tipo, titulo, subtitulo) {
+      if (tipo === "success") {
+        overlayIcon.className = "status-icon icon-success";
+        overlayIcon.innerText = "OK";
+      } else {
+        overlayIcon.className = "status-icon icon-warning";
+        overlayIcon.innerText = "!";
+      }
+
+      overlayTitle.innerText = titulo;
+      overlaySub.innerText = subtitulo;
       overlay.classList.remove("hidden");
 
       let cuenta = 4;
@@ -358,7 +390,6 @@
       resultado.className = "result-card result-waiting";
       resultado.innerText = "Esperando escaneo...";
 
-      // Reanudar cámara
       if (html5QrCode && camaraActiva) {
         try { html5QrCode.resume(); } catch(e) {}
       }
