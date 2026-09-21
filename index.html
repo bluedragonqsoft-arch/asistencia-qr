@@ -180,7 +180,7 @@
     }
   });
 
-  async function procesarRegistro() {
+async function procesarRegistro() {
     const input = document.getElementById("input-dni").value.trim();
     const btn = document.getElementById("btn-vincular");
     const errorDiv = document.getElementById("msg-setup-error");
@@ -197,10 +197,10 @@
     }
 
     btn.disabled = true;
-    btn.innerText = "Preparando lector de huella...";
+    btn.innerText = "Preparando sensor...";
 
     try {
-      // 1. Invocar el hardware biométrico nativo
+      // 1. Invocar el sensor nativo de huella en el celular
       const challenge = new Uint8Array(32);
       window.crypto.getRandomValues(challenge);
 
@@ -209,21 +209,18 @@
       const cred = await navigator.credentials.create({
         publicKey: {
           challenge: challenge,
-          rp: { 
-            name: "Sistema de Asistencia"
-            // Se omite rp.id explícito para que el navegador adopte el dominio actual de GitHub automáticamente
-          },
+          rp: { name: "Sistema de Asistencia" },
           user: {
             id: userIdBytes,
             name: input,
             displayName: "DNI " + input
           },
           pubKeyCredParams: [
-            { alg: -7, type: "public-key" },  // ES256
-            { alg: -257, type: "public-key" } // RS256
+            { alg: -7, type: "public-key" },
+            { alg: -257, type: "public-key" }
           ],
           authenticatorSelection: {
-            authenticatorAttachment: "platform", // Fuerza lector de huella / FaceID integrado
+            authenticatorAttachment: "platform",
             userVerification: "required"
           },
           timeout: 60000
@@ -238,23 +235,12 @@
 
       btn.innerText = "Guardando en Google Sheets...";
 
-      // 2. Guardar en Google Sheets usando form-data para evitar bloqueos CORS
-      const formData = new URLSearchParams();
-      formData.append("action", "registrarUsuario");
-      formData.append("dni", input);
-      formData.append("credId", rawIdStr);
+      // 2. Guardar en Google Sheets (GET limpio sin bloqueos de redirección)
+      const urlEnvio = `${API_URL}?action=registrarUsuario&dni=${encodeURIComponent(input)}&credId=${encodeURIComponent(rawIdStr)}`;
+      
+      await fetch(urlEnvio, { method: "GET", mode: "no-cors" });
 
-      fetch(API_URL, {
-        method: "POST",
-        mode: "no-cors",
-        body: JSON.stringify({
-          action: "registrarUsuario",
-          dni: input,
-          credId: rawIdStr
-        })
-      });
-
-      // Guardar sesión en el teléfono
+      // 3. Guardar en el dispositivo
       localStorage.setItem("asistencia_dni", input);
       localStorage.setItem("asistencia_cred_id", rawIdStr);
       dniActual = input;
@@ -266,7 +252,7 @@
       console.error(err);
       btn.disabled = false;
       btn.innerText = "Vincular Huella";
-      errorDiv.innerText = "Detalle: " + (err.message || "Huella cancelada o no configurada en el celular.");
+      errorDiv.innerText = "Detalle: " + (err.message || "Huella cancelada o fallida.");
     }
   }
 
