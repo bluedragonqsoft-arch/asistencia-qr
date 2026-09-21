@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Terminal de Asistencia - Lectora QR</title>
+  <title>Terminal de Asistencia - Cámara y Pistola QR</title>
+  <!-- Librería para lectura con cámara web/móvil -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
   <style>
     * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
     body {
@@ -14,142 +17,254 @@
       align-items: center;
       min-height: 100vh;
       margin: 0;
-      padding: 20px;
+      padding: 16px;
     }
-    .scanner-box {
+    .scanner-card {
       background: #1e293b;
-      border-radius: 16px;
-      padding: 32px;
+      border-radius: 20px;
+      padding: 24px;
       width: 100%;
-      max-width: 480px;
+      max-width: 440px;
       text-align: center;
       box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     }
-    h1 { font-size: 24px; margin-bottom: 8px; }
-    p { color: #94a3b8; font-size: 14px; margin-bottom: 24px; }
-    
-    .status-indicator {
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    p { color: #94a3b8; font-size: 13px; margin: 0 0 18px; }
+
+    .badges-wrapper {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .badge {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      font-size: 13px;
-      color: #22c55e;
-      background: rgba(34, 197, 94, 0.1);
-      padding: 6px 14px;
+      gap: 6px;
+      font-size: 12px;
+      padding: 5px 12px;
       border-radius: 20px;
-      margin-bottom: 20px;
+      font-weight: 600;
     }
+    .badge-pistola { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid #3b82f6; }
+    .badge-camara { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid #22c55e; }
+
     .dot {
-      width: 8px;
-      height: 8px;
-      background: #22c55e;
+      width: 6px;
+      height: 6px;
+      background: currentColor;
       border-radius: 50%;
-      animation: pulse 1.5s infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.85); }
     }
 
-    input#qr-input {
+    /* Visor de cámara */
+    #reader-container {
       width: 100%;
-      padding: 14px;
-      background: #0f172a;
-      border: 2px solid #334155;
-      border-radius: 10px;
-      color: #f8fafc;
-      font-size: 16px;
-      text-align: center;
-      outline: none;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #000;
+      margin-bottom: 16px;
+      position: relative;
     }
-    input#qr-input:focus { border-color: #3b82f6; }
+    #reader {
+      width: 100% !important;
+      border: none !important;
+    }
+
+    .btn-cam {
+      background: #334155;
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      cursor: pointer;
+      margin-bottom: 16px;
+      font-weight: 500;
+    }
+    .btn-cam:hover { background: #475569; }
+
+    /* Input oculto/enfocado para la pistola lectora */
+    #gun-input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+      top: -100px;
+    }
 
     .result-card {
-      margin-top: 24px;
       padding: 16px;
       border-radius: 12px;
       font-size: 15px;
       font-weight: 600;
-      min-height: 54px;
+      min-height: 56px;
       display: flex;
       align-items: center;
       justify-content: center;
       transition: all 0.3s ease;
     }
+    .result-waiting { background: #334155; color: #cbd5e1; }
     .result-success { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid #22c55e; }
     .result-error { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; }
-    .result-waiting { background: #334155; color: #cbd5e1; }
   </style>
 </head>
 <body>
 
-  <div class="scanner-box">
-    <h1>Control de Acceso</h1>
-    <p>Punto de lectura con pistola de código de barras / QR</p>
+  <div class="scanner-card">
+    <h1>Terminal de Asistencia</h1>
+    <p>Escanea con cámara web o dispara con la pistola física</p>
 
-    <div class="status-indicator">
-      <div class="dot"></div> Lectora Lista
+    <div class="badges-wrapper">
+      <span class="badge badge-pistola"><span class="dot"></span> Pistola lista</span>
+      <span class="badge badge-camara" id="badge-cam-status"><span class="dot"></span> Cámara inactiva</span>
     </div>
 
-    <!-- El input captura automáticamente lo que dispara la pistola -->
-    <input type="text" id="qr-input" placeholder="Acerque el QR a la pistola..." autofocus autocomplete="off">
+    <!-- Visor de Cámara -->
+    <div id="reader-container">
+      <div id="reader"></div>
+    </div>
 
+    <button id="btn-toggle-cam" class="btn-cam" onclick="toggleCamara()">Encender Cámara</button>
+
+    <!-- Input que escucha a la pistola USB/Bluetooth -->
+    <input type="text" id="gun-input" autofocus autocomplete="off">
+
+    <!-- Tarjeta de estado / resultado -->
     <div id="resultado" class="result-card result-waiting">
       Esperando escaneo...
     </div>
   </div>
 
   <script>
-    // TU URL DE GOOGLE APPS SCRIPT (/exec)
+    // TU ENDPOINT ACTIVO DE GOOGLE APPS SCRIPT
     const API_URL = "https://script.google.com/macros/s/AKfycbxw4SCqgPWhdOoretORgpEDtQOACBAlathlotgaklaMAPfUSgNnIpq24FUMi2J8dpsN/exec";
 
-    const input = document.getElementById("qr-input");
+    let html5QrCode = null;
+    let camaraActiva = false;
+    let procesando = false;
     const resultado = document.getElementById("resultado");
+    const gunInput = document.getElementById("gun-input");
+    const badgeCam = document.getElementById("badge-cam-status");
+    const btnCam = document.getElementById("btn-toggle-cam");
 
-    // Mantener el cursor siempre dentro del campo para que no se pierdan lecturas
-    document.addEventListener("click", () => input.focus());
+    // ==========================================
+    // 1. CAPTURA CON PISTOLA LECTORA (HID KEYBOARD)
+    // ==========================================
+    let bufferPistola = "";
+    let ultimoTiempo = 0;
 
-    input.addEventListener("keydown", async (e) => {
-      // Las pistolas siempre disparan la tecla Enter al finalizar la lectura
+    // Escuchar disparos rápidos de teclado de la pistola
+    document.addEventListener("keydown", (e) => {
+      const tiempoActual = Date.now();
+
       if (e.key === "Enter") {
-        const codigoLeido = input.value.trim();
-        input.value = ""; // Limpiar inmediatamente para la siguiente persona
-
-        if (!codigoLeido) return;
-
-        resultado.className = "result-card result-waiting";
-        resultado.innerText = "Validando código...";
-
-        try {
-          const resp = await fetch(API_URL, {
-            method: "POST",
-            body: JSON.stringify({
-              action: "marcarAsistencia",
-              code: codigoLeido,
-              local_id: "Sede Principal"
-            })
-          });
-
-          const data = await resp.json();
-
-          if (data.status === "success") {
-            resultado.className = "result-card result-success";
-            resultado.innerText = `✅ Acceso Concedido: ${data.message} (${data.hora})`;
-            reproducirBeep(800, 150); // Beep de éxito
-          } else {
-            resultado.className = "result-card result-error";
-            resultado.innerText = `❌ Denegado: ${data.message || "QR inválido o expirado"}`;
-            reproducirBeep(300, 400); // Beep de error (tono grave)
-          }
-
-        } catch (err) {
-          resultado.className = "result-card result-error";
-          resultado.innerText = "Error de conexión con Google Sheets";
+        if (bufferPistola.length > 5) {
+          procesarAsistencia(bufferPistola.trim(), "Pistola Lectora");
         }
+        bufferPistola = "";
+        return;
+      }
+
+      // Si las teclas llegan a gran velocidad (< 50ms entre caracteres), es una pistola
+      if (e.key.length === 1) {
+        if (tiempoActual - ultimoTiempo > 100) {
+          bufferPistola = ""; // Reinicia si el usuario escribió manualmente lento
+        }
+        bufferPistola += e.key;
+        ultimoTiempo = tiempoActual;
       }
     });
 
-    // Función para emitir sonido por los parlantes de la PC
+    // ==========================================
+    // 2. CAPTURA CON CÁMARA WEB / MÓVIL
+    // ==========================================
+    async function toggleCamara() {
+      if (camaraActiva) {
+        await detenerCamara();
+      } else {
+        await iniciarCamara();
+      }
+    }
+
+    async function iniciarCamara() {
+      html5QrCode = new Html5Qrcode("reader");
+      const config = { fps: 15, qrbox: { width: 250, height: 250 } };
+
+      try {
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          config,
+          (decodedText) => {
+            procesarAsistencia(decodedText, "Cámara");
+          }
+        );
+        camaraActiva = true;
+        btnCam.innerText = "Apagar Cámara";
+        badgeCam.innerText = "● Cámara activa";
+        badgeCam.style.color = "#4ade80";
+      } catch (err) {
+        console.error("Error al iniciar la cámara:", err);
+        resultado.className = "result-card result-error";
+        resultado.innerText = "No se pudo acceder a la cámara (revisa permisos).";
+      }
+    }
+
+    async function detenerCamara() {
+      if (html5QrCode) {
+        await html5QrCode.stop();
+        html5QrCode.clear();
+        camaraActiva = false;
+        btnCam.innerText = "Encender Cámara";
+        badgeCam.innerText = "● Cámara inactiva";
+        badgeCam.style.color = "#94a3b8";
+      }
+    }
+
+    // ==========================================
+    // 3. ENVÍO A GOOGLE SHEETS
+    // ==========================================
+    async function procesarAsistencia(codigoQR, origen) {
+      if (procesando) return; // Evita doble lectura simultánea
+      procesando = true;
+
+      resultado.className = "result-card result-waiting";
+      resultado.innerText = `Validando (${origen})...`;
+
+      try {
+        const resp = await fetch(API_URL, {
+          method: "POST",
+          body: JSON.stringify({
+            action: "marcarAsistencia",
+            code: codigoQR,
+            local_id: "Sede Principal"
+          })
+        });
+
+        const data = await resp.json();
+
+        if (data.status === "success") {
+          resultado.className = "result-card result-success";
+          resultado.innerText = `✅ Acceso: ${data.message} (${data.hora})`;
+          reproducirBeep(800, 150); // Beep agudo de éxito
+        } else {
+          resultado.className = "result-card result-error";
+          resultado.innerText = `❌ ${data.message || "QR inválido o expirado"}`;
+          reproducirBeep(300, 400); // Beep grave de error
+        }
+
+      } catch (err) {
+        resultado.className = "result-card result-error";
+        resultado.innerText = "Error al conectar con Google Sheets";
+      }
+
+      // Pausa de 2.5 segundos para que la persona retire el celular y no marque doble
+      setTimeout(() => {
+        resultado.className = "result-card result-waiting";
+        resultado.innerText = "Esperando escaneo...";
+        procesando = false;
+      }, 2500);
+    }
+
+    // Sonido por los altavoces de la máquina
     function reproducirBeep(frecuencia, duracionMs) {
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -162,6 +277,11 @@
         setTimeout(() => { osc.stop(); ctx.close(); }, duracionMs);
       } catch (e) {}
     }
+
+    // Intentar abrir cámara automáticamente al cargar
+    window.addEventListener("DOMContentLoaded", () => {
+      iniciarCamara();
+    });
   </script>
 </body>
 </html>
