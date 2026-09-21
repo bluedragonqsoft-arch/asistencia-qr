@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Terminal de Asistencia - Lectora QR</title>
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body {
+      background: #0f172a;
+      color: #f8fafc;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+    }
+    .scanner-box {
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 32px;
+      width: 100%;
+      max-width: 480px;
+      text-align: center;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    p { color: #94a3b8; font-size: 14px; margin-bottom: 24px; }
+    
+    .status-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #22c55e;
+      background: rgba(34, 197, 94, 0.1);
+      padding: 6px 14px;
+      border-radius: 20px;
+      margin-bottom: 20px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      background: #22c55e;
+      border-radius: 50%;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    input#qr-input {
+      width: 100%;
+      padding: 14px;
+      background: #0f172a;
+      border: 2px solid #334155;
+      border-radius: 10px;
+      color: #f8fafc;
+      font-size: 16px;
+      text-align: center;
+      outline: none;
+    }
+    input#qr-input:focus { border-color: #3b82f6; }
+
+    .result-card {
+      margin-top: 24px;
+      padding: 16px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      min-height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s ease;
+    }
+    .result-success { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid #22c55e; }
+    .result-error { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; }
+    .result-waiting { background: #334155; color: #cbd5e1; }
+  </style>
+</head>
+<body>
+
+  <div class="scanner-box">
+    <h1>Control de Acceso</h1>
+    <p>Punto de lectura con pistola de código de barras / QR</p>
+
+    <div class="status-indicator">
+      <div class="dot"></div> Lectora Lista
+    </div>
+
+    <!-- El input captura automáticamente lo que dispara la pistola -->
+    <input type="text" id="qr-input" placeholder="Acerque el QR a la pistola..." autofocus autocomplete="off">
+
+    <div id="resultado" class="result-card result-waiting">
+      Esperando escaneo...
+    </div>
+  </div>
+
+  <script>
+    // TU URL DE GOOGLE APPS SCRIPT (/exec)
+    const API_URL = "https://script.google.com/macros/s/AKfycbxw4SCqgPWhdOoretORgpEDtQOACBAlathlotgaklaMAPfUSgNnIpq24FUMi2J8dpsN/exec";
+
+    const input = document.getElementById("qr-input");
+    const resultado = document.getElementById("resultado");
+
+    // Mantener el cursor siempre dentro del campo para que no se pierdan lecturas
+    document.addEventListener("click", () => input.focus());
+
+    input.addEventListener("keydown", async (e) => {
+      // Las pistolas siempre disparan la tecla Enter al finalizar la lectura
+      if (e.key === "Enter") {
+        const codigoLeido = input.value.trim();
+        input.value = ""; // Limpiar inmediatamente para la siguiente persona
+
+        if (!codigoLeido) return;
+
+        resultado.className = "result-card result-waiting";
+        resultado.innerText = "Validando código...";
+
+        try {
+          const resp = await fetch(API_URL, {
+            method: "POST",
+            body: JSON.stringify({
+              action: "marcarAsistencia",
+              code: codigoLeido,
+              local_id: "Sede Principal"
+            })
+          });
+
+          const data = await resp.json();
+
+          if (data.status === "success") {
+            resultado.className = "result-card result-success";
+            resultado.innerText = `✅ Acceso Concedido: ${data.message} (${data.hora})`;
+            reproducirBeep(800, 150); // Beep de éxito
+          } else {
+            resultado.className = "result-card result-error";
+            resultado.innerText = `❌ Denegado: ${data.message || "QR inválido o expirado"}`;
+            reproducirBeep(300, 400); // Beep de error (tono grave)
+          }
+
+        } catch (err) {
+          resultado.className = "result-card result-error";
+          resultado.innerText = "Error de conexión con Google Sheets";
+        }
+      }
+    });
+
+    // Función para emitir sonido por los parlantes de la PC
+    function reproducirBeep(frecuencia, duracionMs) {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = frecuencia;
+        osc.start();
+        setTimeout(() => { osc.stop(); ctx.close(); }, duracionMs);
+      } catch (e) {}
+    }
+  </script>
+</body>
+</html>
