@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Control de Asistencia</title>
+  <!-- Librerías para criptografía HMAC/SHA256 y renderizado de código QR -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body {
+      background-color: #f1f5f9;
+      margin: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 16px;
+    }
+    .card {
+      background: white;
+      border-radius: 20px;
+      padding: 28px 24px;
+      width: 100%;
+      max-width: 350px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+      text-align: center;
+    }
+    h2 { margin: 0 0 8px; font-size: 20px; color: #0f172a; }
+    p { margin: 0 0 20px; font-size: 14px; color: #64748b; }
+    
+    input[type="text"] {
+      width: 100%;
+      padding: 12px;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 10px;
+      font-size: 16px;
+      margin-bottom: 15px;
+      text-align: center;
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: #2563eb; }
+
+    .btn {
+      background: #2563eb;
+      color: white;
+      border: none;
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    .btn:disabled { background: #94a3b8; cursor: not-allowed; }
+    .btn:active { background: #1d4ed8; }
+
+    .error-msg {
+      color: #dc2626;
+      font-size: 13px;
+      margin-top: 12px;
+      font-weight: 500;
+    }
+
+    #qrcode {
+      display: flex;
+      justify-content: center;
+      margin: 16px 0;
+    }
+    #qrcode img {
+      border: 6px solid #f8fafc;
+      border-radius: 12px;
+    }
+
+    .progress-bar {
+      height: 6px;
+      background: #22c55e;
+      border-radius: 3px;
+      width: 100%;
+      transition: width 1s linear;
+    }
+    .bar-wrapper {
+      background: #e2e8f0;
+      border-radius: 3px;
+      height: 6px;
+      margin: 12px 0 6px;
+      overflow: hidden;
+    }
+    .badge-dni {
+      display: inline-block;
+      background: #e0e7ff;
+      color: #3730a3;
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 15px;
+    }
+    .reset-link {
+      margin-top: 18px;
+      display: inline-block;
+      font-size: 13px;
+      color: #94a3b8;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+
+  <!-- VISTA 1: REGISTRO INICIAL (DNI + ENROLAR HUELLA) -->
+  <div id="view-setup">
+    <h2>Registro de Asistencia</h2>
+    <p>Ingresa tu DNI para vincular este celular a tu huella digital.</p>
+    <input type="text" id="input-dni" placeholder="Número de DNI" maxlength="15" inputmode="numeric">
+    <button class="btn" id="btn-vincular" onclick="procesarRegistro()">
+      Vincular Huella
+    </button>
+    <div id="msg-setup-error" class="error-msg"></div>
+  </div>
+
+  <!-- VISTA 2: VALIDAR HUELLA EN CADA INGRESO -->
+  <div id="view-login" class="hidden">
+    <div class="badge-dni" id="badge-login-dni">DNI: -</div>
+    <h2>Validar Identidad</h2>
+    <p>Toca el botón y coloca tu huella en el sensor del teléfono.</p>
+    <button class="btn" id="btn-validar" onclick="validarHuella()">
+      <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11a7.96 7.96 0 00.902 3.71m-.902 3.71A19.866 19.866 0 0012 21c2.302 0 4.508-.391 6.56-1.114"></path>
+      </svg>
+      Colocar Huella
+    </button>
+    <div id="msg-login-error" class="error-msg"></div>
+    <span class="reset-link" onclick="desvincular()">Cambiar DNI</span>
+  </div>
+
+  <!-- VISTA 3: QR DINÁMICO AUTORIZADO (EXPIRA CADA 20s) -->
+  <div id="view-qr" class="hidden">
+    <div class="badge-dni" id="badge-qr-dni">DNI: -</div>
+    <h2>QR Autorizado</h2>
+    <p>Acércalo a la pistola lectora</p>
+
+    <div id="qrcode"></div>
+
+    <div class="bar-wrapper">
+      <div id="progress-bar" class="progress-bar"></div>
+    </div>
+    <div id="timer-text" style="font-size: 13px; font-weight: 600; color: #64748b;">Expira en 20s</div>
+    <br>
+    <button class="btn" style="background: #64748b; font-size: 14px; padding: 10px;" onclick="cerrarQR()">Bloquear QR</button>
+  </div>
+
+</div>
+
+<script>
+  // 1. REEMPLAZA ESTA URL CON LA DE TU GOOGLE APPS SCRIPT (/exec):
+  const API_URL = "TU_URL_DE_APPS_SCRIPT_AQUI";
+
+  const SECRET_KEY = "MI_CLAVE_SECRETA_ASISTENCIA";
+  const DURACION_QR = 20;
+
+  let dniActual = localStorage.getItem("asistencia_dni") || "";
+  let credIdLocal = localStorage.getItem("asistencia_cred_id") || "";
+  let qrInstance = null;
+  let timerInterval = null;
+  let segundosRestantes = DURACION_QR;
+
+  window.addEventListener('DOMContentLoaded', () => {
+    if (dniActual && credIdLocal) {
+      document.getElementById("view-setup").classList.add("hidden");
+      document.getElementById("view-login").classList.remove("hidden");
+      document.getElementById("badge-login-dni").innerText = "DNI: " + dniActual;
+    }
+  });
+
+  // REGISTRO INICIAL (DNI + HUELLA NATIVA)
+  async function procesarRegistro() {
+    const input = document.getElementById("input-dni").value.trim();
+    const btn = document.getElementById("btn-vincular");
+    const errorDiv = document.getElementById("msg-setup-error");
+    errorDiv.innerText = "";
+
+    if (!input || input.length < 6) {
+      errorDiv.innerText = "Ingresa un DNI válido.";
+      return;
+    }
+
+    if (!window.PublicKeyCredential) {
+      errorDiv.innerText = "Tu navegador no admite biometría. Usa Chrome o Safari.";
+      return;
+    }
+
+    btn.disabled = true;
+    btn.innerText = "Consultando base de datos...";
+
+    try {
+      // 1. Verificar si el DNI ya está registrado en Google Sheets
+      const res = await fetch(`${API_URL}?action=verificarDNI&dni=${encodeURIComponent(input)}`);
+      const data = await res.json();
+
+      if (data.registrado) {
+        btn.disabled = false;
+        btn.innerText = "Vincular Huella";
+        errorDiv.innerText = "Este DNI ya fue registrado en otro celular.";
+        return;
+      }
+
+      btn.innerText = "Coloca tu dedo en el sensor...";
+
+      // 2. Invocar el sensor nativo del teléfono
+      const challenge = new Uint8Array(32);
+      window.crypto.getRandomValues(challenge);
+
+      const cred = await navigator.credentials.create({
+        publicKey: {
+          challenge: challenge,
+          rp: { name: "Control Asistencia" },
+          user: {
+            id: new TextEncoder().encode(input),
+            name: input,
+            displayName: "DNI " + input
+          },
+          pubKeyCredParams: [
+            { alg: -7, type: "public-key" },
+            { alg: -257, type: "public-key" }
+          ],
+          authenticatorSelection: {
+            authenticatorAttachment: "platform",
+            userVerification: "required"
+          },
+          timeout: 60000
+        }
+      });
+
+      const rawIdStr = btoa(String.fromCharCode(...new Uint8Array(cred.rawId)));
+
+      btn.innerText = "Guardando en Google Sheets...";
+
+      // 3. Guardar el DNI y el ID de huella en Google Sheets
+      await fetch(API_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "registrarUsuario",
+          dni: input,
+          credId: rawIdStr
+        })
+      });
+
+      localStorage.setItem("asistencia_dni", input);
+      localStorage.setItem("asistencia_cred_id", rawIdStr);
+      dniActual = input;
+      credIdLocal = rawIdStr;
+
+      mostrarPantallaQR();
+
+    } catch (err) {
+      console.error(err);
+      btn.disabled = false;
+      btn.innerText = "Vincular Huella";
+      errorDiv.innerText = "No se pudo leer la huella o fue cancelada.";
+    }
+  }
+
+  // VALIDACIÓN OBLIGATORIA DE HUELLA
+  async function validarHuella() {
+    const errorDiv = document.getElementById("msg-login-error");
+    errorDiv.innerText = "";
+
+    try {
+      const challenge = new Uint8Array(32);
+      window.crypto.getRandomValues(challenge);
+
+      const credBuffer = Uint8Array.from(atob(credIdLocal), c => c.charCodeAt(0));
+
+      await navigator.credentials.get({
+        publicKey: {
+          challenge: challenge,
+          allowCredentials: [{
+            id: credBuffer,
+            type: "public-key",
+            transports: ["internal"]
+          }],
+          userVerification: "required",
+          timeout: 60000
+        }
+      });
+
+      mostrarPantallaQR();
+
+    } catch (err) {
+      console.error(err);
+      errorDiv.innerText = "Huella incorrecta o cancelada.";
+    }
+  }
+
+  // MOSTRAR QR DINÁMICO
+  function mostrarPantallaQR() {
+    document.getElementById("view-setup").classList.add("hidden");
+    document.getElementById("view-login").classList.add("hidden");
+    document.getElementById("view-qr").classList.remove("hidden");
+    document.getElementById("badge-qr-dni").innerText = "DNI: " + dniActual;
+
+    if (!qrInstance) {
+      qrInstance = new QRCode(document.getElementById("qrcode"), {
+        width: 210,
+        height: 210,
+        correctLevel: QRCode.CorrectLevel.M
+      });
+    }
+
+    renderizarQR();
+    iniciarContador();
+  }
+
+  function renderizarQR() {
+    const timestamp = Date.now();
+    const signature = CryptoJS.HmacSHA256(`${dniActual}:${timestamp}`, SECRET_KEY).toString(CryptoJS.enc.Hex).substring(0, 16);
+    const payload = `${dniActual}|${timestamp}|${signature}`;
+
+    qrInstance.clear();
+    qrInstance.makeCode(payload);
+  }
+
+  function iniciarContador() {
+    segundosRestantes = DURACION_QR;
+    actualizarBarra();
+
+    clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+      segundosRestantes--;
+      actualizarBarra();
+
+      if (segundosRestantes <= 0) {
+        renderizarQR();
+        segundosRestantes = DURACION_QR;
+        actualizarBarra();
+      }
+    }, 1000);
+  }
+
+  function actualizarBarra() {
+    const bar = document.getElementById("progress-bar");
+    const porcentaje = (segundosRestantes / DURACION_QR) * 100;
+    bar.style.width = porcentaje + "%";
+    document.getElementById("timer-text").innerText = `Expira en ${segundosRestantes}s`;
+
+    if (segundosRestantes <= 5) {
+      bar.style.backgroundColor = "#ef4444";
+    } else {
+      bar.style.backgroundColor = "#22c55e";
+    }
+  }
+
+  function cerrarQR() {
+    clearInterval(timerInterval);
+    document.getElementById("view-qr").classList.add("hidden");
+    document.getElementById("view-login").classList.remove("hidden");
+  }
+
+  function desvincular() {
+    if (confirm("¿Deseas desvincular este DNI y registrar otro?")) {
+      localStorage.clear();
+      location.reload();
+    }
+  }
+</script>
+
+</body>
+</html>
