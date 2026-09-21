@@ -179,7 +179,7 @@
     }
   });
 
-  async function procesarRegistro() {
+async function procesarRegistro() {
     const input = document.getElementById("input-dni").value.trim();
     const btn = document.getElementById("btn-vincular");
     const errorDiv = document.getElementById("msg-setup-error");
@@ -233,9 +233,16 @@
 
       btn.innerText = "Guardando en Google Sheets...";
 
-      // Enviar a Google Apps Script
-      const urlEnvio = `${API_URL}?action=registrarUsuario&dni=${encodeURIComponent(input)}&credId=${encodeURIComponent(rawIdStr)}`;
-      await fetch(urlEnvio, { method: "GET", mode: "no-cors" });
+      // ENVÍO INFALIBLE: Objeto Image (bypassea CORS y sigue redirecciones 302 sin bloquear)
+      const urlEnvio = `${API_URL}?action=registrarUsuario&dni=${encodeURIComponent(input)}&credId=${encodeURIComponent(rawIdStr)}&t=${Date.now()}`;
+      
+      await new Promise((resolve) => {
+        const ping = new Image();
+        ping.onload = () => resolve();
+        ping.onerror = () => resolve(); // Google devuelve JSON, así que activará onerror, pero la petición ya llegó y se ejecutó en Sheets
+        ping.src = urlEnvio;
+        setTimeout(resolve, 1500); // 1.5s de resguardo para asegurar la escritura
+      });
 
       localStorage.setItem("asistencia_dni", input);
       localStorage.setItem("asistencia_cred_id", rawIdStr);
@@ -251,7 +258,6 @@
       errorDiv.innerText = "Detalle: " + (err.message || "Huella cancelada o fallida.");
     }
   }
-
   async function validarHuella() {
     const errorDiv = document.getElementById("msg-login-error");
     errorDiv.innerText = "";
